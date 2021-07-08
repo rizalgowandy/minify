@@ -1,10 +1,12 @@
-# Minify <a name="minify"></a> [![API reference](https://img.shields.io/badge/godoc-reference-5272B4)](https://pkg.go.dev/github.com/tdewolff/minify/v2?tab=doc) [![Go Report Card](https://goreportcard.com/badge/github.com/tdewolff/minify)](https://goreportcard.com/report/github.com/tdewolff/minify) [![Coverage Status](https://coveralls.io/repos/github/tdewolff/minify/badge.svg?branch=master)](https://coveralls.io/github/tdewolff/minify?branch=master) [![Donate](https://img.shields.io/badge/patreon-donate-DFB317)](https://www.patreon.com/tdewolff)
+# Minify <a name="minify"></a> [![API reference](https://img.shields.io/badge/godoc-reference-5272B4)](https://pkg.go.dev/github.com/tdewolff/minify/v2?tab=doc) [![Go Report Card](https://goreportcard.com/badge/github.com/tdewolff/minify)](https://goreportcard.com/report/github.com/tdewolff/minify) [![codecov](https://codecov.io/gh/tdewolff/minify/branch/master/graph/badge.svg?token=Cr7r2EKPj2)](https://codecov.io/gh/tdewolff/minify) [![Donate](https://img.shields.io/badge/patreon-donate-DFB317)](https://www.patreon.com/tdewolff)
 
 **[Online demo](https://go.tacodewolff.nl/minify) if you need to minify files *now*.**
 
 **[Command line tool](https://github.com/tdewolff/minify/tree/master/cmd/minify) that minifies concurrently and watches file changes.**
 
 **[Releases](https://github.com/tdewolff/minify/releases) of CLI for various platforms.** See [CLI](https://github.com/tdewolff/minify/tree/master/cmd/minify) for more installation instructions.
+
+**[Parse](https://github.com/tdewolff/minify/tree/master/parse) subpackage on which minify depends.**
  
 ---
 
@@ -74,7 +76,15 @@ Minifiers or bindings to minifiers exist in almost all programming languages. So
 This minifier proves to be that fast and extensive minifier that can handle HTML and any other filetype it may contain (CSS, JS, ...). It is usually orders of magnitude faster than existing minifiers.
 
 ## Installation
-With modules enabled (`GO111MODULES=auto` or `GO111MODULES=on`), add the following imports and run the project with `go get`
+Make sure you have [Git](https://git-scm.com/) and [Go](https://golang.org/dl/) (1.13 or higher) installed, run
+```
+mkdir Project
+cd Project
+go mod init
+go get -u github.com/tdewolff/minify/v2
+```
+
+Then add the following imports to be able to use the various minifiers
 ``` go
 import (
 	"github.com/tdewolff/minify/v2"
@@ -86,6 +96,8 @@ import (
 	"github.com/tdewolff/minify/v2/xml"
 )
 ```
+
+You can optionally run `go mod tidy` to clean up the `go.mod` and `go.sum` files.
 
 See [CLI tool](https://github.com/tdewolff/minify/tree/master/cmd/minify) for installation instructions of the binary.
 

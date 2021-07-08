@@ -83,10 +83,10 @@ func (t Token) String() string {
 }
 
 // Equal returns true if both tokens are equal.
-func (a Token) Equal(b Token) bool {
-	if a.TokenType == b.TokenType && bytes.Equal(a.Data, b.Data) && len(a.Args) == len(b.Args) {
-		for i := 0; i < len(a.Args); i++ {
-			if a.Args[i].TokenType != b.Args[i].TokenType || !bytes.Equal(a.Args[i].Data, b.Args[i].Data) {
+func (t Token) Equal(t2 Token) bool {
+	if t.TokenType == t2.TokenType && bytes.Equal(t.Data, t2.Data) && len(t.Args) == len(t2.Args) {
+		for i := 0; i < len(t.Args); i++ {
+			if t.Args[i].TokenType != t2.Args[i].TokenType || !bytes.Equal(t.Args[i].Data, t2.Args[i].Data) {
 				return false
 			}
 		}
@@ -189,7 +189,7 @@ func (c *cssMinifier) minifyGrammar() {
 		case css.AtRuleGrammar:
 			c.w.Write(data)
 			values := c.p.Values()
-			if ToHash(data[1:]) == Import && len(values) == 2 && values[1].TokenType == css.URLToken {
+			if ToHash(data[1:]) == Import && len(values) == 2 && values[1].TokenType == css.URLToken && 4 < len(values[1].Data) && values[1].Data[len(values[1].Data)-1] == ')' {
 				url := values[1].Data
 				if url[4] != '"' && url[4] != '\'' {
 					a := 4
@@ -885,7 +885,7 @@ func (c *cssMinifier) minifyProperty(prop Hash, values []Token) []Token {
 			}
 
 			if end-start == 0 {
-				values = append(values[:start], append([]Token{{css.NumberToken, zeroBytes, nil, 0, 0}, Token{css.NumberToken, zeroBytes, nil, 0, 0}}, values[end:]...)...)
+				values = append(values[:start], append([]Token{{css.NumberToken, zeroBytes, nil, 0, 0}, {css.NumberToken, zeroBytes, nil, 0, 0}}, values[end:]...)...)
 				end += 2
 			}
 			start = end + 1
@@ -1532,5 +1532,5 @@ func (c *cssMinifier) minifyDimension(value Token) (Token, []byte) {
 	//	}
 	//	value.Data = append(num, dim...)
 	//}
-	return value, dim
+	//return value, dim
 }
