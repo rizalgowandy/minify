@@ -1,0 +1,7 @@
+{
+  "exports": "./example.js",
+  "type": "module",
+  "dependencies": {
+    "@tdewolff/minify": "latest"
+  }
+}

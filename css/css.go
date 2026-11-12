@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,6 +17,10 @@ import (
 	strconvParse "github.com/tdewolff/parse/v2/strconv"
 )
 
+const NestedFunctionLimit = 1000
+
+var ErrNestedFunctionLimit = fmt.Errorf("too many nested functions")
+
 var (
 	spaceBytes        = []byte(" ")
 	colonBytes        = []byte(":")
@@ -25,6 +30,7 @@ var (
 	rightBracketBytes = []byte("}")
 	rightParenBytes   = []byte(")")
 	urlBytes          = []byte("url(")
+	varBytes          = []byte("var(")
 	zeroBytes         = []byte("0")
 	oneBytes          = []byte("1")
 	transparentBytes  = []byte("transparent")
@@ -51,15 +57,17 @@ type cssMinifier struct {
 	o *Minifier
 
 	tokenBuffer []Token
+	tokensLevel int
 }
 
 ////////////////////////////////////////////////////////////////
 
 // Minifier is a CSS minifier.
 type Minifier struct {
-	KeepCSS2     bool
 	Precision    int // number of significant digits
 	newPrecision int // precision for new numbers
+	Inline       bool
+	Version      int
 }
 
 // Minify minifies CSS data, it reads from r and writes to w.
@@ -79,14 +87,21 @@ func (t Token) String() string {
 	if len(t.Args) == 0 {
 		return t.TokenType.String() + "(" + string(t.Data) + ")"
 	}
-	return fmt.Sprint(t.Args)
+
+	sb := strings.Builder{}
+	sb.Write(t.Data)
+	for _, arg := range t.Args {
+		sb.WriteString(arg.String())
+	}
+	sb.WriteByte(')')
+	return sb.String()
 }
 
 // Equal returns true if both tokens are equal.
 func (t Token) Equal(t2 Token) bool {
 	if t.TokenType == t2.TokenType && bytes.Equal(t.Data, t2.Data) && len(t.Args) == len(t2.Args) {
 		for i := 0; i < len(t.Args); i++ {
-			if t.Args[i].TokenType != t2.Args[i].TokenType || !bytes.Equal(t.Args[i].Data, t2.Args[i].Data) {
+			if !t.Args[i].Equal(t2.Args[i]) {
 				return false
 			}
 		}
@@ -125,36 +140,45 @@ func (t Token) IsLengthPercentage() bool {
 
 // Minify minifies CSS data, it reads from r and writes to w.
 func (o *Minifier) Minify(m *minify.M, w io.Writer, r io.Reader, params map[string]string) error {
+	tmp := &Minifier{}
+	*tmp = *o
+	o = tmp
+
 	o.newPrecision = o.Precision
 	if o.newPrecision <= 0 || 15 < o.newPrecision {
 		o.newPrecision = 15 // minimum number of digits a double can represent exactly
+	}
+	if !o.Inline {
+		o.Inline = params != nil && params["inline"] == "1"
+	}
+	if o.Version <= 0 {
+		o.Version = 3
 	}
 
 	z := parse.NewInput(r)
 	defer z.Restore()
 
-	isInline := params != nil && params["inline"] == "1"
 	c := &cssMinifier{
 		m: m,
 		w: w,
-		p: css.NewParser(z, isInline),
+		p: css.NewParser(z, o.Inline),
 		o: o,
 	}
-	c.minifyGrammar()
-
-	if _, err := w.Write(nil); err != nil {
+	if err := c.minifyGrammar(); err != nil {
 		return err
-	}
-	if c.p.Err() == io.EOF {
+	} else if _, err := w.Write(nil); err != nil {
+		return err
+	} else if c.p.Err() == io.EOF {
 		return nil
 	}
 	return c.p.Err()
 }
 
-func (c *cssMinifier) minifyGrammar() {
+func (c *cssMinifier) minifyGrammar() error {
 	semicolonQueued := false
 	for {
 		gt, _, data := c.p.Next()
+	Next:
 		switch gt {
 		case css.ErrorGrammar:
 			if c.p.HasParseError() {
@@ -164,7 +188,7 @@ func (c *cssMinifier) minifyGrammar() {
 
 				// write out the offending declaration (but save the semicolon)
 				vals := c.p.Values()
-				if len(vals) > 0 && vals[len(vals)-1].TokenType == css.SemicolonToken {
+				if 0 < len(vals) && vals[len(vals)-1].TokenType == css.SemicolonToken {
 					vals = vals[:len(vals)-1]
 					semicolonQueued = true
 				}
@@ -173,7 +197,7 @@ func (c *cssMinifier) minifyGrammar() {
 				}
 				continue
 			}
-			return
+			return nil
 		case css.EndAtRuleGrammar, css.EndRulesetGrammar:
 			c.w.Write(rightBracketBytes)
 			semicolonQueued = false
@@ -215,33 +239,48 @@ func (c *cssMinifier) minifyGrammar() {
 			for _, val := range values {
 				c.w.Write(val.Data)
 			}
-			semicolonQueued = true
+			c.w.Write(semicolonBytes)
+			semicolonQueued = false
 		case css.BeginAtRuleGrammar:
-			c.w.Write(data)
-			for _, val := range c.p.Values() {
-				c.w.Write(val.Data)
+			rule := slices.Clone(data)
+			values := slices.Clone(c.p.Values())
+			gt, _, data = c.p.Next()
+			if gt == css.EndAtRuleGrammar {
+				gt, _, data = c.p.Next()
+			} else {
+				c.w.Write(rule)
+				for _, val := range values {
+					c.w.Write(val.Data)
+				}
+				c.w.Write(leftBracketBytes)
 			}
-			c.w.Write(leftBracketBytes)
-		case css.QualifiedRuleGrammar:
-			c.minifySelectors(data, c.p.Values())
-			c.w.Write(commaBytes)
+			goto Next
 		case css.BeginRulesetGrammar:
-			c.minifySelectors(data, c.p.Values())
-			c.w.Write(leftBracketBytes)
+			selectors := slices.Clone(c.p.Values())
+			gt, _, data = c.p.Next()
+			if gt == css.EndRulesetGrammar {
+				gt, _, data = c.p.Next()
+			} else {
+				c.minifySelectors(selectors)
+				c.w.Write(leftBracketBytes)
+			}
+			goto Next
 		case css.DeclarationGrammar:
-			c.minifyDeclaration(data, c.p.Values())
+			if err := c.minifyDeclaration(data, c.p.Values()); err != nil {
+				return err
+			}
 			semicolonQueued = true
 		case css.CustomPropertyGrammar:
 			c.w.Write(data)
 			c.w.Write(colonBytes)
-			value := parse.TrimWhitespace(c.p.Values()[0].Data)
+			value := minifyCustomPropertyValue(c.p.Values()[0].Data)
 			if len(c.p.Values()[0].Data) != 0 && len(value) == 0 {
 				value = spaceBytes
 			}
 			c.w.Write(value)
 			semicolonQueued = true
 		case css.CommentGrammar:
-			if len(data) > 5 && data[1] == '*' && data[2] == '!' {
+			if 5 < len(data) && data[1] == '*' && data[2] == '!' {
 				c.w.Write(data[:3])
 				comment := parse.TrimWhitespace(parse.ReplaceMultipleWhitespace(data[3 : len(data)-2]))
 				c.w.Write(comment)
@@ -251,12 +290,87 @@ func (c *cssMinifier) minifyGrammar() {
 			c.w.Write(data)
 		}
 	}
+	return nil
 }
 
-func (c *cssMinifier) minifySelectors(property []byte, values []css.Token) {
+// minifyCustomPropertyValue collapses each run of whitespace in a custom
+// property value to a single space and removes whitespace around commas and
+// at both ends. All other tokens, such as strings and comments, are kept as is.
+func minifyCustomPropertyValue(value []byte) []byte {
+	if !hasCollapsibleWhitespace(value) {
+		return trimCustomPropertyValue(value)
+	}
+
+	b := make([]byte, 0, len(value))
+	l := css.NewLexer(parse.NewInputBytes(value))
+	var ws []byte
+	prev := css.ErrorToken
+	for {
+		tt, data := l.Next()
+		if tt == css.ErrorToken {
+			if l.Err() != io.EOF {
+				return trimCustomPropertyValue(value)
+			}
+			if ws != nil && isBackslashDelim(prev, b) {
+				b = append(b, ws...)
+			}
+			return b
+		} else if tt == css.WhitespaceToken {
+			ws = data
+			continue
+		}
+		if ws != nil && prev != css.ErrorToken {
+			if isBackslashDelim(prev, b) {
+				// a backslash followed by a newline is not an escape, keep the
+				// newline since a space would turn it into one
+				b = append(b, ws...)
+			} else if prev != css.CommaToken && tt != css.CommaToken {
+				b = append(b, ' ')
+			}
+		}
+		b = append(b, data...)
+		ws = nil
+		prev = tt
+	}
+}
+
+// trimCustomPropertyValue trims whitespace at both ends, but keeps the
+// whitespace after a trailing backslash since it may be an escaped space.
+func trimCustomPropertyValue(value []byte) []byte {
+	start, end := 0, len(value)
+	for start < end && parse.IsWhitespace(value[start]) {
+		start++
+	}
+	for start < end && parse.IsWhitespace(value[end-1]) {
+		end--
+	}
+	if start < end && value[end-1] == '\\' && end < len(value) {
+		end++
+	}
+	return value[start:end]
+}
+
+// hasCollapsibleWhitespace returns true if b has a whitespace character other
+// than a single space, or a space next to a comma.
+func hasCollapsibleWhitespace(b []byte) bool {
+	for i, c := range b {
+		if parse.IsWhitespace(c) {
+			if c != ' ' || i+1 < len(b) && (parse.IsWhitespace(b[i+1]) || b[i+1] == ',') || 0 < i && b[i-1] == ',' {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isBackslashDelim(tt css.TokenType, b []byte) bool {
+	return tt == css.DelimToken && b[len(b)-1] == '\\'
+}
+
+func (c *cssMinifier) minifySelectors(values []css.Token) {
 	inAttr := false
 	isClass := false
-	for _, val := range c.p.Values() {
+	for _, val := range values {
 		if !inAttr {
 			if val.TokenType == css.IdentToken {
 				if !isClass {
@@ -285,24 +399,31 @@ func (c *cssMinifier) minifySelectors(property []byte, values []css.Token) {
 	}
 }
 
-func (c *cssMinifier) parseFunction(values []css.Token) ([]Token, int) {
+func (c *cssMinifier) parseFunction(values []css.Token, level int) ([]Token, int, error) {
+	if NestedFunctionLimit < level {
+		return nil, 0, ErrNestedFunctionLimit
+	}
+
 	i := 1
-	level := 0
+	parenthesisLevel := 0
 	args := []Token{}
 	for ; i < len(values); i++ {
 		tt := values[i].TokenType
 		data := values[i].Data
 		if tt == css.LeftParenthesisToken {
-			level++
+			parenthesisLevel++
 		} else if tt == css.RightParenthesisToken {
-			if level == 0 {
+			if parenthesisLevel == 0 {
 				i++
 				break
 			}
-			level--
+			parenthesisLevel--
 		}
 		if tt == css.FunctionToken {
-			subArgs, di := c.parseFunction(values[i:])
+			subArgs, di, err := c.parseFunction(values[i:], level+1)
+			if err != nil {
+				return nil, 0, ErrNestedFunctionLimit
+			}
 			h := ToHash(parse.ToLower(parse.Copy(data[:len(data)-1]))) // TODO: use ToHashFold
 			args = append(args, Token{tt, data, subArgs, h, 0})
 			i += di - 1
@@ -314,10 +435,10 @@ func (c *cssMinifier) parseFunction(values []css.Token) ([]Token, int) {
 			args = append(args, Token{tt, data, nil, 0, h})
 		}
 	}
-	return args, i
+	return args, i, nil
 }
 
-func (c *cssMinifier) parseDeclaration(values []css.Token) []Token {
+func (c *cssMinifier) parseDeclaration(values []css.Token) ([]Token, error) {
 	// Check if this is a simple list of values separated by whitespace or commas, otherwise we'll not be processing
 	prevSep := true
 	tokens := c.tokenBuffer[:0]
@@ -326,11 +447,11 @@ func (c *cssMinifier) parseDeclaration(values []css.Token) []Token {
 		data := values[i].Data
 		if tt == css.LeftParenthesisToken || tt == css.LeftBraceToken || tt == css.LeftBracketToken ||
 			tt == css.RightParenthesisToken || tt == css.RightBraceToken || tt == css.RightBracketToken {
-			return nil
+			return nil, nil
 		}
 
 		if !prevSep && tt != css.WhitespaceToken && tt != css.CommaToken && (tt != css.DelimToken || values[i].Data[0] != '/') {
-			return nil
+			return nil, nil
 		}
 
 		if tt == css.WhitespaceToken || tt == css.CommaToken || tt == css.DelimToken && values[i].Data[0] == '/' {
@@ -339,7 +460,10 @@ func (c *cssMinifier) parseDeclaration(values []css.Token) []Token {
 			}
 			prevSep = true
 		} else if tt == css.FunctionToken {
-			args, di := c.parseFunction(values[i:])
+			args, di, err := c.parseFunction(values[i:], 0)
+			if err != nil {
+				return nil, err
+			}
 			h := ToHash(parse.ToLower(parse.Copy(data[:len(data)-1]))) // TODO: use ToHashFold
 			tokens = append(tokens, Token{tt, data, args, h, 0})
 			prevSep = true
@@ -354,26 +478,29 @@ func (c *cssMinifier) parseDeclaration(values []css.Token) []Token {
 		}
 	}
 	c.tokenBuffer = tokens // update buffer size for memory reuse
-	return tokens
+	return tokens, nil
 }
 
-func (c *cssMinifier) minifyDeclaration(property []byte, components []css.Token) {
+func (c *cssMinifier) minifyDeclaration(property []byte, components []css.Token) error {
 	c.w.Write(property)
 	c.w.Write(colonBytes)
 
 	if len(components) == 0 {
-		return
+		return nil
 	}
 
 	// Strip !important from the component list, this will be added later separately
 	important := false
-	if len(components) > 2 && components[len(components)-2].TokenType == css.DelimToken && components[len(components)-2].Data[0] == '!' && ToHash(components[len(components)-1].Data) == Important {
+	if 2 < len(components) && components[len(components)-2].TokenType == css.DelimToken && components[len(components)-2].Data[0] == '!' && ToHash(components[len(components)-1].Data) == Important {
 		components = components[:len(components)-2]
 		important = true
 	}
 
 	prop := ToHash(property)
-	values := c.parseDeclaration(components)
+	values, err := c.parseDeclaration(components)
+	if err != nil {
+		return err
+	}
 
 	// Do not process complex values (eg. containing blocks or is not alternated between whitespace/commas and flat values
 	if values == nil {
@@ -397,16 +524,20 @@ func (c *cssMinifier) minifyDeclaration(property []byte, components []css.Token)
 			c.w.Write(component.Data)
 		}
 		if important {
+			if c.o.Version <= 2 {
+				c.w.Write(spaceBytes)
+			}
 			c.w.Write(importantBytes)
 		}
-		return
+		return nil
 	}
 
 	values = c.minifyTokens(prop, 0, values)
-	if len(values) > 0 {
+	if 0 < len(values) {
 		values = c.minifyProperty(prop, values)
 	}
 	c.writeDeclaration(values, important)
+	return nil
 }
 
 func (c *cssMinifier) writeFunction(args []Token) {
@@ -440,11 +571,19 @@ func (c *cssMinifier) writeDeclaration(values []Token, important bool) {
 	}
 
 	if important {
+		if c.o.Version <= 2 {
+			c.w.Write(spaceBytes)
+		}
 		c.w.Write(importantBytes)
 	}
 }
 
 func (c *cssMinifier) minifyTokens(prop Hash, fun Hash, values []Token) []Token {
+	if 100 < c.tokensLevel+1 {
+		return values
+	}
+	c.tokensLevel++
+
 	for i, value := range values {
 		tt := value.TokenType
 		switch tt {
@@ -452,14 +591,14 @@ func (c *cssMinifier) minifyTokens(prop Hash, fun Hash, values []Token) []Token 
 			if prop == Z_Index || prop == Counter_Increment || prop == Counter_Reset || prop == Orphans || prop == Widows {
 				break // integers
 			}
-			if c.o.KeepCSS2 {
+			if c.o.Version <= 2 {
 				values[i].Data = minify.Decimal(values[i].Data, c.o.Precision) // don't use exponents
 			} else {
 				values[i].Data = minify.Number(values[i].Data, c.o.Precision)
 			}
 		case css.PercentageToken:
 			n := len(values[i].Data) - 1
-			if c.o.KeepCSS2 {
+			if c.o.Version <= 2 {
 				values[i].Data = minify.Decimal(values[i].Data[:n], c.o.Precision) // don't use exponents
 			} else {
 				values[i].Data = minify.Number(values[i].Data[:n], c.o.Precision)
@@ -555,7 +694,7 @@ func (c *cssMinifier) minifyTokens(prop Hash, fun Hash, values []Token) []Token 
 
 				if a == 1.0 && (len(vals) == 3 || len(vals) == 4) { // only minify color if fully opaque
 					if fun == Rgb || fun == Rgba {
-						for j := 0; j < 3; j++ {
+						for j := range 3 {
 							if args[j*2].TokenType == css.NumberToken {
 								vals[j] /= 255.0
 								if vals[j] < minify.Epsilon {
@@ -584,14 +723,14 @@ func (c *cssMinifier) minifyTokens(prop Hash, fun Hash, values []Token) []Token 
 				if 3 <= len(vals) && (fun == Rgb || fun == Rgba) {
 					// 0%, 20%, 40%, 60%, 80% and 100% can be represented exactly as, 51, 102, 153, 204, and 255 respectively
 					removePercentage := true
-					for j := 0; j < 3; j++ {
+					for j := range 3 {
 						if args[j*2].TokenType != css.PercentageToken || 2.0*minify.Epsilon <= math.Mod(vals[j]+minify.Epsilon, 0.2) {
 							removePercentage = false
 							break
 						}
 					}
 					if removePercentage {
-						for j := 0; j < 3; j++ {
+						for j := range 3 {
 							args[j*2].TokenType = css.NumberToken
 							if vals[j] < minify.Epsilon {
 								args[j*2].Data = zeroBytes
@@ -612,6 +751,7 @@ func (c *cssMinifier) minifyTokens(prop Hash, fun Hash, values []Token) []Token 
 			}
 		}
 	}
+	c.tokensLevel--
 	return values
 }
 
@@ -690,7 +830,7 @@ func (c *cssMinifier) minifyProperty(prop Hash, values []Token) []Token {
 				parse.ToLower(value.Data)
 				s := value.Data[1 : len(value.Data)-1]
 				if 0 < len(s) {
-					for _, split := range bytes.Split(s, spaceBytes) {
+					for split := range bytes.SplitSeq(s, spaceBytes) {
 						// if len is zero, it contains two consecutive spaces
 						if len(split) == 0 || !css.IsIdent(split) {
 							unquote = false
@@ -847,6 +987,8 @@ func (c *cssMinifier) minifyProperty(prop Hash, values []Token) []Token {
 					values = append(values[:i], values[i+1:]...)
 					end--
 					i--
+					continue
+				} else if values[i].TokenType == css.FunctionToken && bytes.Equal(values[i].Data, varBytes) {
 					continue
 				}
 
@@ -1015,17 +1157,19 @@ func (c *cssMinifier) minifyProperty(prop Hash, values []Token) []Token {
 			}
 			// removing zero offsets in the previous loop might make it eligible for the next loop
 			if end-start == 1 || end-start == 2 {
-				if values[start].Ident == Top || values[start].Ident == Bottom {
-					if end-start == 1 {
-						// we can't make this smaller, and converting to a number will break it
-						// (https://github.com/tdewolff/minify/issues/221#issuecomment-415419918)
-						break
-					}
+				if end-start == 1 && (values[start].Ident == Top || values[start].Ident == Bottom) {
+					// we can't make this smaller, and converting to a number will break it
+					// (https://github.com/tdewolff/minify/issues/221#issuecomment-415419918)
+					break
+				}
+
+				if end-start == 2 && (values[start].Ident == Top || values[start].Ident == Bottom || values[start+1].Ident == Left || values[start+1].Ident == Right) {
 					// if it's a vertical position keyword, swap it with the next element
 					// since otherwise converted number positions won't be valid anymore
 					// (https://github.com/tdewolff/minify/issues/221#issue-353067229)
 					values[start], values[start+1] = values[start+1], values[start]
 				}
+
 				// transform keywords to lengths|percentages
 				for i := start; i < end; i++ {
 					if values[i].TokenType == css.IdentToken {
@@ -1100,12 +1244,12 @@ func (c *cssMinifier) minifyProperty(prop Hash, values []Token) []Token {
 		values[0] = minifyColor(values[0])
 	case Background_Color:
 		values[0] = minifyColor(values[0])
-		if !c.o.KeepCSS2 {
-			if values[0].Ident == Transparent {
-				values[0].Data = initialBytes
-				values[0].Ident = Initial
-			}
-		}
+		//if c.o.Version >= 3 {
+		//	if values[0].Ident == Transparent {
+		//		values[0].Data = initialBytes
+		//		values[0].Ident = Initial
+		//	}
+		//}
 	case Border_Color:
 		sameValues := true
 		for i := range values {
@@ -1115,7 +1259,7 @@ func (c *cssMinifier) minifyProperty(prop Hash, values []Token) []Token {
 			} else {
 				values[i] = minifyColor(values[i])
 			}
-			if 0 < i && sameValues && !bytes.Equal(values[0].Data, values[i].Data) {
+			if 0 < i && sameValues && !values[0].Equal(values[i]) {
 				sameValues = false
 			}
 		}
@@ -1288,7 +1432,7 @@ func (c *cssMinifier) minifyProperty(prop Hash, values []Token) []Token {
 				values = append(values, Token{css.CommaToken, commaBytes, nil, 0, None})
 			}
 			if ran[0] == ran[1] {
-				urange := []byte(fmt.Sprintf("U+%X", ran[0]))
+				urange := fmt.Appendf(nil, "U+%X", ran[0])
 				values = append(values, Token{css.UnicodeRangeToken, urange, nil, 0, None})
 			} else if ran[0] == 0 && ran[1] == 0x10FFFF {
 				values = append(values, Token{css.IdentToken, initialBytes, nil, 0, None})
@@ -1308,12 +1452,12 @@ func (c *cssMinifier) minifyProperty(prop Hash, values []Token) []Token {
 				var urange []byte
 				if wildcards != 0 {
 					if ran[0]>>(wildcards*4) == 0 {
-						urange = []byte(fmt.Sprintf("U+%s", strings.Repeat("?", wildcards)))
+						urange = fmt.Appendf(nil, "U+%s", strings.Repeat("?", wildcards))
 					} else {
-						urange = []byte(fmt.Sprintf("U+%X%s", ran[0]>>(wildcards*4), strings.Repeat("?", wildcards)))
+						urange = fmt.Appendf(nil, "U+%X%s", ran[0]>>(wildcards*4), strings.Repeat("?", wildcards))
 					}
 				} else {
-					urange = []byte(fmt.Sprintf("U+%X-%X", ran[0], ran[1]))
+					urange = fmt.Appendf(nil, "U+%X-%X", ran[0], ran[1])
 				}
 				values = append(values, Token{css.UnicodeRangeToken, urange, nil, 0, None})
 			}
@@ -1408,7 +1552,7 @@ func (c *cssMinifier) minifyDimension(value Token) (Token, []byte) {
 		}
 
 		num := value.Data[:n]
-		if c.o.KeepCSS2 {
+		if c.o.Version <= 2 {
 			num = minify.Decimal(num, c.o.Precision) // don't use exponents
 		} else {
 			num = minify.Number(num, c.o.Precision)
@@ -1426,7 +1570,7 @@ func (c *cssMinifier) minifyDimension(value Token) (Token, []byte) {
 	//	dim = value.Data[n:]
 	//	parse.ToLower(dim)
 
-	//	if c.o.KeepCSS2 {
+	//	if c.o.Version<=2 {
 	//		num = minify.Decimal(num, c.o.Precision) // don't use exponents
 	//	} else {
 	//		num = minify.Number(num, c.o.Precision)
@@ -1520,8 +1664,8 @@ func (c *cssMinifier) minifyDimension(value Token) (Token, []byte) {
 	//		}
 	//		for i := range dimensions {
 	//			if dimensions[i] != h { //&& (d < 1.0) == (multipliers[i] > 1.0) {
-	//				b, _ := strconvParse.AppendFloat([]byte{}, d*multipliers[i], -1)
-	//				if c.o.KeepCSS2 {
+	//				b := strconvParse.AppendFloat([]byte{}, d*multipliers[i], -1)
+	//				if c.o.Version<=2 {
 	//					b = minify.Decimal(b, c.o.newPrecision) // don't use exponents
 	//				} else {
 	//					b = minify.Number(b, c.o.newPrecision)

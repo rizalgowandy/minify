@@ -18,31 +18,36 @@ func TestCSS(t *testing.T) {
 	}{
 		{"/*comment*/", ""},
 		{"/*! bang  comment */", "/*!bang comment*/"},
+		{"/*# sourceMappingURL=url */", ""},
 		{"a;", "a"},
-		{"i{}/*! bang  comment */", "i{}/*!bang comment*/"},
+		{"i{a:b;}/*! bang  comment */", "i{a:b}/*!bang comment*/"},
 		{"i { key: value; key2: value; }", "i{key:value;key2:value}"},
 		{".cla .ss > #id { x:y; }", ".cla .ss>#id{x:y}"},
 		{".cla[id ^= L] { x:y; }", ".cla[id^=L]{x:y}"},
 		{"area:focus { outline : 0;}", "area:focus{outline:0}"},
-		{"@import 'file';", "@import 'file'"},
-		{"@import url('file');", "@import 'file'"},
-		{"@import url(//url);", `@import "//url"`},
-		{"@import url(\n//url\n);", `@import "//url"`},
-		{"@import url();", `@import ""`},
+		{"@import 'file';", "@import 'file';"},
+		{"@import url('file');", "@import 'file';"},
+		{"@import url(//url);", `@import "//url";`},
+		{"@import url(\n//url\n);", `@import "//url";`},
+		{"@import url();", `@import "";`},
 		{"@font-face { x:y; }", "@font-face{x:y}"},
 
 		{"input[type=\"radio\"]{x:y}", "input[type=radio]{x:y}"},
 		{"input[type=\"radio\" i]{x:y}", "input[type=radio i]{x:y}"},
 		{"DIV{margin:1em}", "div{margin:1em}"},
 		{".CLASS{margin:1em}", ".CLASS{margin:1em}"},
-		{"@MEDIA all{}", "@media all{}"},
-		{"@media only screen and (max-width : 800px){}", "@media only screen and (max-width:800px){}"},
-		{"@media (-webkit-min-device-pixel-ratio:1.5),(min-resolution:1.5dppx){}", "@media(-webkit-min-device-pixel-ratio:1.5),(min-resolution:1.5dppx){}"},
+		{"@MEDIA all{a:b}", "@media all{a:b}"},
+		{"@media only screen and (max-width : 800px){a:b}", "@media only screen and (max-width:800px){a:b}"},
+		{"@media (-webkit-min-device-pixel-ratio:1.5),(min-resolution:1.5dppx){a:b}", "@media(-webkit-min-device-pixel-ratio:1.5),(min-resolution:1.5dppx){a:b}"},
 		{"[class^=icon-] i[class^=icon-],i[class*=\" icon-\"]{x:y}", "[class^=icon-] i[class^=icon-],i[class*=\" icon-\"]{x:y}"},
 		{"html{line-height:1;}html{line-height:1;}", "html{line-height:1}html{line-height:1}"},
 		{"a { b: 1", "a{b:1}"},
 		{"@unknown { border:1px solid #000 }", "@unknown{border:1px solid #000 }"},
 		{":root { --custom-variable:0px; }", ":root{--custom-variable:0px}"},
+		{"a{--foo: a\\\n;color:red}", "a{--foo:a\\\n;color:red}"},                                                                                                   // #740
+		{":root { --v: 1px   2px }\n:root { --v: a,   b,   c; }\n:root { --v: a,\n        b,\n        c;\n}", ":root{--v:1px 2px}:root{--v:a,b,c}:root{--v:a,b,c}"}, // #740
+		{"a, b, c {color:red}", "a,b,c{color:red}"},
+		{"a, b, c { /* lala */ }", ""},
 
 		// recurring property overwrites previous
 		//{"a{color:blue;color:red}", "a{color:red}"},
@@ -52,7 +57,7 @@ func TestCSS(t *testing.T) {
 		//{"a{color:blue}a{color:red}", "a{color:blue}a{color:red}"}, // not supported
 
 		// case sensitivity
-		{"@counter-style Ident{}", "@counter-style Ident{}"},
+		{"@counter-style Ident{a:b}", "@counter-style Ident{a:b}"},
 
 		// coverage
 		{"a, b + c { x:y; }", "a,b+c{x:y}"},
@@ -63,16 +68,25 @@ func TestCSS(t *testing.T) {
 		{".clearfix { order:4; *zoom: 1px; color:red; }", ".clearfix{order:4;*zoom:1px;color:red}"},
 
 		// go-fuzz
-		{"input[type=\"\x00\"] {  a: b\n}.a{}", "input[type=\"\x00\"]{a:b}.a{}"},
+		{"input[type=\"\x00\"] {  a: b\n}.a{b:c}", "input[type=\"\x00\"]{a:b}.a{b:c}"},
 		{"a{a:)'''", "a{a:)'''}"},
 		{"{T:l(", "{t:l()}"},
 		{"{background:0 0 0", "{background:0 0}"},
 		{"{d:url( \n  \n\t0", "{d:url()}"},
 		{"{d:urL(     '0", `{d:url("'")}`},
 		{`{-ms-filter:"`, `{-ms-filter:"}`},
-		{"@import url(", `@import url(`},
-		{"@import url( ", `@import url( `},
-		{"@import url(  )", `@import ""`},
+		{"@import url(", `@import url(;`},
+		{"@import url( ", `@import url( ;`},
+		{"@import url(  )", `@import "";`},
+
+		// bugs
+		{"a{@media screen and (min-width:1024px){ width: 40%; } & h1 { font-size: clamp(2.5rem, 1rem + 3vw, 3.5rem)}}", "a{@media screen and (min-width:1024px){width: 40%;}& h1{font-size:clamp(2.5rem,1rem + 3vw,3.5rem)}}"},           // #602
+		{"a{padding:calc(var(--dce-edge-xsmall,6px) - 2px) calc(var(--dce-button-horizontal-padding,18px) - 2px)}", "a{padding:calc(var(--dce-edge-xsmall,6px) - 2px)calc(var(--dce-button-horizontal-padding,18px) - 2px)}"},            // #673
+		{"a{border-color:var(--dce-brand-color,#01A982)var(--dce-brand-color,#01A982)var(--dce-border-weak,#0000001F)}", "a{border-color:var(--dce-brand-color,#01A982)var(--dce-brand-color,#01A982)var(--dce-border-weak,#0000001F)}"}, // #673
+		{"--custom:calc(var(--a) + var(--b))", "--custom:calc(var(--a) + var(--b))"}, // #784
+		{"a{& :is(b) {c:d;} }", "a{& :is(b){c:d}}"},                                  // #908
+		{"a{&:is(b) :is(c) {d:e;} }", "a{&:is(b) :is(c){d:e}}"},                      // #908
+		//{"@scope (body) { :scope { color: red; } }", "@scope(body){:scope{color:red}}"}, // #968
 	}
 
 	m := minify.New()
@@ -87,7 +101,7 @@ func TestCSS(t *testing.T) {
 
 	// coverage
 	test.T(t, Token{css.IdentToken, []byte("data"), nil, 0, 0}.String(), "Ident(data)")
-	test.T(t, Token{css.FunctionToken, nil, []Token{{css.IdentToken, []byte("data"), nil, 0, 0}}, 0, 0}.String(), "[Ident(data)]")
+	test.T(t, Token{css.FunctionToken, []byte("func("), []Token{{css.IdentToken, []byte("data"), nil, 0, 0}}, 0, 0}.String(), "func(Ident(data))")
 }
 
 func TestCSSInline(t *testing.T) {
@@ -137,7 +151,7 @@ func TestCSSInline(t *testing.T) {
 		{"color: hsla(400, 150%, 150%, 2);", "color:#fff"},
 		//{"color: hwb(0 0% 0%);", "color:red"}, TODO
 		//{"color: hwb(120 20% 20%/50%);", "color:"}, TODO
-		{"background-color:transparent", "background-color:initial"},
+		{"background-color:transparent", "background-color:transparent"},
 		{"background-position:top", "background-position:top"},
 		{"background-position:bottom", "background-position:bottom"},
 		{"background-position:center", "background-position:50%"},
@@ -148,6 +162,7 @@ func TestCSSInline(t *testing.T) {
 		{"background-position:bottom left", "background-position:0 100%"},
 		{"background-position:top center", "background-position:50% 0"},
 		{"background-position:bottom center", "background-position:50% 100%"},
+		{"background-position:center left", "background-position:0"},
 		{"background-position:bottom 5% right 0%", "background-position:100% 95%"},
 		{"background-position:bottom 0 right 10%", "background-position:90% 100%"},
 		{"background-position:top 10% left 5%", "background-position:5% 10%"},
@@ -341,6 +356,23 @@ func TestCSSInline(t *testing.T) {
 		{"--foo: ;", "--foo: "},               // whitespace value
 		{"--foo:;", "--foo:"},                 // empty value
 		{"--foo: initial ;", "--foo:initial"}, // invalid value, serializes to empty
+
+		{"--foo: 1px   2px", "--foo:1px 2px"},                                     // #740
+		{"--foo: a,   b,   c", "--foo:a,b,c"},                                     // #740
+		{"--foo: a,\n        b,\n        c", "--foo:a,b,c"},                       // #740
+		{"--foo: a ,b , c", "--foo:a,b,c"},                                        // #740
+		{"--foo: \"a  ,  b\"   'c  d'", "--foo:\"a  ,  b\" 'c  d'"},               // #740
+		{"--foo: url(  a.png  )  x", "--foo:url(  a.png  ) x"},                    // #740
+		{"--foo: f(  a  ,  b  )", "--foo:f( a,b )"},                               // #740
+		{"--foo: a  /* x  y */  b", "--foo:a /* x  y */ b"},                       // #740
+		{"--foo: calc(var(--a)  +  var(--b))", "--foo:calc(var(--a) + var(--b))"}, // #740
+		{"--foo: a\\\n  b", "--foo:a\\\n  b"},                                     // #740
+		{"--foo: a\\\n  , b", "--foo:a\\\n  ,b"},                                  // #740
+		{"--foo: \\41   b", "--foo:\\41  b"},                                      // #740
+		{"--foo: a\\ ", "--foo:a\\ "},                                             // escaped space
+		{"--foo: a\\  ", "--foo:a\\ "},                                            // escaped space
+
+		{"x: var(--0);", "x:var(--0)"},
 		{"color=blue;", "color=blue"},
 		{"x: white , white", "x:white,white"},
 
@@ -409,6 +441,7 @@ func TestCSSInline(t *testing.T) {
 		{"color:rgba(255,255,255,0)", "color:rgba(255,255,255,0)"}, // #327
 		{"box-shadow:none", "box-shadow:none"},                     // #332
 		{"margin:var(--a,0px)", "margin:var(--a,0px)"},             // #371
+		{"background:transparent var(--bs-btn-close-bg) center/1em auto no-repeat", "background:var(--bs-btn-close-bg)50%/1em no-repeat"}, // #603
 
 		// go-fuzz
 		{"FONT-FAMILY: ru\"", "font-family:ru\""},
@@ -432,7 +465,7 @@ func TestCSSInline(t *testing.T) {
 	}
 }
 
-func TestCSSKeepCSS2(t *testing.T) {
+func TestCSS2(t *testing.T) {
 	tests := []struct {
 		css      string
 		expected string
@@ -442,11 +475,13 @@ func TestCSSKeepCSS2(t *testing.T) {
 		{`margin:5000em`, `margin:5000em`},
 		{`color:transparent`, `color:transparent`},
 		{`background-color:transparent`, `background-color:transparent`},
+		//{`background-color:black!important`, `background-color:#000!important`}, // TODO: fails! may make result bigger
+		{`background-color:black !important`, `background-color:#000 !important`},
 	}
 
 	m := minify.New()
 	params := map[string]string{"inline": "1"}
-	cssMinifier := &Minifier{KeepCSS2: true}
+	cssMinifier := &Minifier{Version: 2}
 	for _, tt := range tests {
 		t.Run(tt.css, func(t *testing.T) {
 			r := bytes.NewBufferString(tt.css)
@@ -471,7 +506,7 @@ func TestWriterErrors(t *testing.T) {
 		n   []int
 	}{
 		{`@import 'file'`, []int{0, 2}},
-		{`@media all{}`, []int{0, 2, 3, 4}},
+		{`@media all{a:b}`, []int{0, 2, 3, 4}},
 		{`a[id^="L"]{margin:2in!important;color:red}`, []int{0, 4, 6, 7, 8, 9, 10, 11}},
 		{`a{color:rgb(255,0,0)}`, []int{4}},
 		{`a{color:rgb(255,255,255)}`, []int{4}},

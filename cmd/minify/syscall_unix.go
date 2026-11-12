@@ -1,4 +1,4 @@
-// +build linux darwin netbsd solaris openbsd js wasm
+//go:build linux || darwin || netbsd || solaris || openbsd || js || wasm
 
 package main
 
@@ -6,6 +6,8 @@ import (
 	"os"
 	"syscall"
 )
+
+var supportsGetOwnership = true
 
 func getOwnership(info os.FileInfo) (int, int, bool) {
 	if stat_t, ok := info.Sys().(*syscall.Stat_t); ok {

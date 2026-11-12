@@ -1,0 +1,72 @@
+{
+  "name": "@tdewolff/minify",
+  "version": "{VERSION}",
+  "type": "module",
+  "author": "Taco de Wolff",
+  "license": "MIT",
+  "description": "Go minifiers for web formats",
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist/",
+    "build/",
+    "go/",
+    "scripts/"
+  ],
+  "scripts": {
+    "build": "npm run build:go && npm run build:ts",
+    "build:go": "node ./scripts/build-go.mjs",
+    "forcebuild:go": "node ./scripts/build-go.mjs --force-build",
+    "build:ts": "tsdown",
+    "build:ts:watch": "tsdown --watch",
+    "prepare": "npm run build:ts",
+    "postinstall": "npm run build:go",
+    "test": "vitest"
+  },
+  "homepage": "https://github.com/tdewolff/minify#readme",
+  "bugs": {
+    "url": "https://github.com/tdewolff/minify/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tdewolff/minify.git"
+  },
+  "keywords": [
+    "minify",
+    "minifier",
+    "html",
+    "css",
+    "js",
+    "javascript",
+    "svg",
+    "json",
+    "xml",
+    "go"
+  ],
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "tsdown": "^0.23.4",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  },
+  "dependencies": {
+    "koffi": "^3.3.5"
+  }
+}

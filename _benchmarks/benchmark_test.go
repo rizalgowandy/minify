@@ -1,7 +1,7 @@
 package benchmarks
 
 import (
-	"io/ioutil"
+	"os"
 	"runtime"
 	"testing"
 
@@ -12,7 +12,7 @@ import (
 
 func benchmark(b *testing.B, mediatype string, sample string) {
 	m := minify.Default
-	in, err := ioutil.ReadFile(sample)
+	in, err := os.ReadFile(sample)
 	if err != nil {
 		panic(err)
 	}
@@ -62,10 +62,14 @@ func BenchmarkHTML(b *testing.B) {
 func BenchmarkJS(b *testing.B) {
 	var samples = []string{
 		"sample_ace.js",
+		"sample_antd.js",
 		"sample_dot.js",
+		"sample_echarts.js",
 		"sample_jquery.js",
 		"sample_jqueryui.js",
 		"sample_moment.js",
+		"sample_typescript.js",
+		"sample_victory.js",
 	}
 	for _, sample := range samples {
 		benchmark(b, "application/javascript", sample)

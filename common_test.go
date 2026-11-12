@@ -3,7 +3,6 @@ package minify
 import (
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math"
 	"math/rand"
 	"strconv"
@@ -21,6 +20,7 @@ func TestMediatype(t *testing.T) {
 		{"text/html; charset=UTF-8", "text/html;charset=utf-8"},
 		{"text/html; charset=UTF-8 ; param = \" ; \"", "text/html;charset=utf-8;param=\" ; \""},
 		{"text/html, text/css", "text/html,text/css"},
+		{`video/mp4; codecs="av01.0.05M.08"`, `video/mp4;codecs="av01.0.05M.08"`}, // #545
 	}
 	for _, tt := range mediatypeTests {
 		t.Run(tt.mediatype, func(t *testing.T) {
@@ -50,10 +50,11 @@ func TestDataURI(t *testing.T) {
 		{"data:text/other,\"<\u2318", "data:text/other,%22%3C%E2%8C%98"},
 		{"data:text/other,\"<\u2318>", "data:text/other;base64,IjzijJg+"},
 		{`data:text/svg+xml,%3Csvg height="100" width="100"><circle cx="50" cy="50" r="40" stroke="black" stroke-width="3" fill="red" /></svg>`, `data:text/svg+xml,%3Csvg height="100" width="100"><circle cx="50" cy="50" r="40" stroke="black" stroke-width="3" fill="red" /></svg>`},
+		{`data:image/svg&#43;xml,%e2%ad%90`, `data:image/svg&#43;xml,%E2%AD%90`},
 	}
 	m := New()
 	m.AddFunc("text/x", func(_ *M, w io.Writer, r io.Reader, _ map[string]string) error {
-		b, _ := ioutil.ReadAll(r)
+		b, _ := io.ReadAll(r)
 		test.String(t, string(b), "<?xx?>")
 		_, _ = w.Write(b)
 		return nil
@@ -188,6 +189,8 @@ func TestNumber(t *testing.T) {
 		{"11e9223372036854775807", "11e9223372036854775807"},
 		{".01e-9223372036854775808", ".01e-9223372036854775808"},
 		{".011e-9223372036854775808", ".011e-9223372036854775808"},
+		{"1e-1", ".1"},
+		{"e-1", "e-1"},
 
 		{".12345e8", "12345e3"},
 		{".12345e7", "1234500"},
@@ -297,7 +300,7 @@ func TestNumberTruncate(t *testing.T) {
 		{".3333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333397e-902", 0, "3333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333397e-999"},
 		{".3333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333397e-903", 0, ".3333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333397e-903"},
 		{"29.629775e-9", 0, ".29629775e-7"},
-		{"e-9223372036854775808", 0, "e-9223372036854775808"},
+		{"1e-9223372036854775808", 0, "1e-9223372036854775808"},
 		{"139.99999999", 8, "140"},
 	}
 	for _, tt := range numberTests {
@@ -353,7 +356,7 @@ var numbers [][]byte
 
 func TestMain(t *testing.T) {
 	numbers = make([][]byte, 0, n)
-	for j := 0; j < n; j++ {
+	for range n {
 		numbers = append(numbers, RandNumBytes(true))
 	}
 }
@@ -386,7 +389,7 @@ func RandNumBytes(withExp bool) []byte {
 
 func BenchmarkNumber(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		for j := 0; j < n; j++ {
+		for j := range n {
 			Number(numbers[j], -1)
 		}
 	}

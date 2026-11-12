@@ -6,11 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -24,7 +24,7 @@ func helperCommand(t *testing.T, s ...string) *exec.Cmd {
 	cs := []string{"-test.run=TestHelperProcess", "--"}
 	cs = append(cs, s...)
 	cmd := exec.Command(os.Args[0], cs...)
-	cmd.Env = []string{"GO_WANT_HELPER_PROCESS=1"}
+	cmd.Env = []string{"GO_WANT_HELPER_PROCESS=1", "GOCOVERDIR=."}
 	return cmd
 }
 
@@ -137,6 +137,52 @@ func TestAdd(t *testing.T) {
 	test.String(t, s[len(s)-13:], "exit status 2")
 }
 
+type commandOutputWriter struct {
+	err error
+}
+
+func (w commandOutputWriter) Write([]byte) (int, error) {
+	return 0, w.err
+}
+
+func TestCommandOutputWriteError(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		writeErr, want error
+	}{
+		{"error", errDummy, errDummy},
+		{"short-write", nil, io.ErrShortWrite},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := New()
+			m.AddCmd("dummy/file", helperCommand(t, "dummy/file", "-in=[$in.ext]", "-out=$out.ext"))
+			err := m.Minify("dummy/file", commandOutputWriter{tc.writeErr}, strings.NewReader("test"))
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("got %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestCommandArgumentsReusable(t *testing.T) {
+	cmd := helperCommand(t, "dummy/file", "-in=[$in.ext]", "-out=$out.ext")
+	args := slices.Clone(cmd.Args)
+	m := New()
+	m.AddCmd("dummy/file", cmd)
+	for _, input := range []string{"first", "second"} {
+		var out bytes.Buffer
+		if err := m.Minify("dummy/file", &out, strings.NewReader(input)); err != nil {
+			t.Fatal(err)
+		}
+		if out.String() != input {
+			t.Fatalf("got %q, want %q", out.String(), input)
+		}
+		if !slices.Equal(cmd.Args, args) {
+			t.Fatalf("command arguments changed: got %q, want %q", cmd.Args, args)
+		}
+	}
+}
+
 func TestMatch(t *testing.T) {
 	pattern, params, _ := m.Match("dummy/copy; a=b")
 	test.String(t, pattern, "dummy/copy")
@@ -205,7 +251,7 @@ func TestWriter(t *testing.T) {
 		return errDummy
 	})
 	m.AddFunc("dummy/late-err", func(m *M, w io.Writer, r io.Reader, _ map[string]string) error {
-		_, _ = ioutil.ReadAll(r)
+		_, _ = io.ReadAll(r)
 		return errDummy
 	})
 
@@ -219,7 +265,7 @@ func TestWriter(t *testing.T) {
 	mw = m.Writer("dummy/err", w)
 	_, _ = mw.Write([]byte("test"))
 	test.T(t, mw.Close(), errDummy)
-	test.String(t, w.String(), "test", "equal input after dummy minify writer")
+	test.String(t, w.String(), "")
 
 	w = &bytes.Buffer{}
 	mw = m.Writer("dummy/late-err", w)
@@ -228,46 +274,59 @@ func TestWriter(t *testing.T) {
 	test.String(t, w.String(), "")
 }
 
-type responseWriter struct {
+type testResponseWriter struct {
 	writer io.Writer
 	header http.Header
 }
 
-func (w *responseWriter) Header() http.Header {
+func (w *testResponseWriter) Header() http.Header {
 	return w.header
 }
 
-func (w *responseWriter) WriteHeader(_ int) {}
+func (w *testResponseWriter) WriteHeader(_ int) {}
 
-func (w *responseWriter) Write(b []byte) (int, error) {
+func (w *testResponseWriter) Write(b []byte) (int, error) {
 	return w.writer.Write(b)
 }
 
 func TestResponseWriter(t *testing.T) {
 	m := New()
 	m.AddFunc("text/html", func(m *M, w io.Writer, r io.Reader, _ map[string]string) error {
-		_, err := io.Copy(w, r)
+		_, _ = io.ReadAll(r)
+		_, err := w.Write([]byte("minified"))
 		return err
 	})
 
+	// use file extension
 	b := &bytes.Buffer{}
-	w := &responseWriter{b, http.Header{}}
+	w := &testResponseWriter{b, http.Header{}}
 	r := &http.Request{RequestURI: "/index.html"}
 	mw := m.ResponseWriter(w, r)
+	_, err := mw.Write([]byte("input"))
 	test.Error(t, mw.Close())
-	_, _ = mw.Write([]byte("test"))
-	test.Error(t, mw.Close())
-	test.String(t, b.String(), "test", "equal input after dummy minify response writer")
+	test.String(t, b.String(), "minified")
+	_, err = mw.Write([]byte("test"))
+	test.T(t, err, io.ErrClosedPipe)
 
+	// use Content-Type header
 	b = &bytes.Buffer{}
-	w = &responseWriter{b, http.Header{}}
+	w = &testResponseWriter{b, http.Header{}}
 	r = &http.Request{RequestURI: "/index"}
 	mw = m.ResponseWriter(w, r)
 	mw.Header().Add("Content-Type", "text/html")
-	_, _ = mw.Write([]byte("test"))
+	_, _ = mw.Write([]byte("input"))
 	mw.WriteHeader(http.StatusForbidden)
 	test.Error(t, mw.Close())
-	test.String(t, b.String(), "test", "equal input after dummy minify response writer")
+	test.String(t, b.String(), "minified")
+
+	// don't minify
+	b = &bytes.Buffer{}
+	w = &testResponseWriter{b, http.Header{}}
+	r = &http.Request{RequestURI: "/image.png"}
+	mw = m.ResponseWriter(w, r)
+	_, _ = mw.Write([]byte("input"))
+	test.Error(t, mw.Close())
+	test.String(t, b.String(), "input")
 }
 
 func TestMiddleware(t *testing.T) {
@@ -278,7 +337,7 @@ func TestMiddleware(t *testing.T) {
 	})
 
 	b := &bytes.Buffer{}
-	w := &responseWriter{b, http.Header{}}
+	w := &testResponseWriter{b, http.Header{}}
 	r := &http.Request{RequestURI: "/index.html"}
 	m.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("test"))
@@ -318,7 +377,7 @@ func TestHelperProcess(*testing.T) {
 			return
 		}
 
-		b, err := ioutil.ReadFile(in)
+		b, err := os.ReadFile(in)
 		if err != nil {
 			_, _ = w.WriteString(err.Error())
 			_ = w.Close()

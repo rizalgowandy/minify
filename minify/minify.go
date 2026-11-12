@@ -20,9 +20,27 @@ func init() {
 	Default.AddFunc("text/css", css.Minify)
 	Default.AddFunc("text/html", html.Minify)
 	Default.AddFunc("image/svg+xml", svg.Minify)
-	Default.AddFuncRegexp(regexp.MustCompile("^(application|text)/(x-)?(java|ecma)script$"), js.Minify)
+	Default.AddFuncRegexp(regexp.MustCompile("^(application|text)/(x-)?(java|ecma|j|live)script(1\\.[0-5])?$|^module$"), js.Minify)
 	Default.AddFuncRegexp(regexp.MustCompile("[/+]json$"), json.Minify)
 	Default.AddFuncRegexp(regexp.MustCompile("[/+]xml$"), xml.Minify)
+
+	Default.AddFunc("importmap", json.Minify)
+	Default.AddFunc("speculationrules", json.Minify)
+
+	aspMinifier := &html.Minifier{}
+	aspMinifier.TemplateDelims = [2]string{"<%", "%>"}
+	Default.Add("text/asp", aspMinifier)
+	Default.Add("text/x-ejs-template", aspMinifier)
+
+	phpMinifier := &html.Minifier{}
+	phpMinifier.TemplateDelims = [2]string{"<?", "?>"} // also handles <?php
+	Default.Add("application/x-httpd-php", phpMinifier)
+
+	tmplMinifier := &html.Minifier{}
+	tmplMinifier.TemplateDelims = [2]string{"{{", "}}"}
+	Default.Add("text/x-go-template", tmplMinifier)
+	Default.Add("text/x-mustache-template", tmplMinifier)
+	Default.Add("text/x-handlebars-template", tmplMinifier)
 }
 
 // CSS string minifier using all default minifiers

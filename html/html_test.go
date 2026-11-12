@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/url"
 	"os"
 	"regexp"
@@ -26,23 +25,25 @@ func TestHTML(t *testing.T) {
 		expected string
 	}{
 		{`html`, `html`},
+		//{"<title>title</title> <body>", `<title>title</title>`},
 		{`<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML+RDFa 1.0//EN" "http://www.w3.org/MarkUp/DTD/xhtml-rdfa-1.dtd">`, `<!doctype html>`},
 		{`<!-- comment -->`, ``},
-		{`<!--# SSI Tag -->`, `<!--# SSI Tag -->`},
+		{`<!--# SSI Tag -->`, ``},
 		{`<style><!--\ncss\n--></style>`, `<style><!--\ncss\n--></style>`},
 		{`<style>&</style>`, `<style>&</style>`},
 		{`<html><head></head><body>x</body></html>`, `x`},
+		{"<html><head><title> a </title>\n<link></head></html>", `<title>a</title><link>`},
 		{`<meta http-equiv="content-type" content="text/html; charset=utf-8">`, `<meta charset=utf-8>`},
 		{`<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />`, `<meta charset=utf-8>`},
 		{`<meta http-equiv=" content-type " content=" text/html;  charset=utf-8 ">`, `<meta charset=utf-8>`},
-		{`<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src https://*; child-src 'none';">`, `<meta http-equiv=content-security-policy content="default-src 'self'; img-src https://*; child-src 'none';">`},
+		{`<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src https://*; child-src 'none';">`, `<meta http-equiv=Content-Security-Policy content="default-src 'self'; img-src https://*; child-src 'none';">`},
 		{`<meta name="keywords" content="a, b">`, `<meta name=keywords content="a,b">`},
 		//{`<meta name="keywords" content=" a,  b ">`, `<meta name=keywords content="a,b">`}, // TODO
 		{`<meta name="viewport" content="width = 996" />`, `<meta name=viewport content="width=996">`},
 		{`<span attr="test"></span>`, `<span attr=test></span>`},
 		{`<span attr='test&apos;test'></span>`, `<span attr="test'test"></span>`},
 		{`<span attr="test&quot;test"></span>`, `<span attr='test"test'></span>`},
-		{`<span attr='test""&apos;&amp;test'></span>`, `<span attr='test""&#39;&test'></span>`},
+		{`<span attr='test""&apos;&amp;test'></span>`, `<span attr='test""&#39;&amp;test'></span>`},
 		{`<span attr="test/test"></span>`, `<span attr=test/test></span>`},
 		{`<span attr="test/"></span>`, `<span attr=test/></span>`},
 		{`<span>&amp;</span>`, `<span>&</span>`},
@@ -51,12 +52,12 @@ func TestHTML(t *testing.T) {
 		{`<code>&quot;&rsquor;</code>`, `<code>"&#8217;</code>`},
 		{`<small>&#160;</small>`, `<small>&#160;</small>`},
 		{`<span name="&lt;&apos;">a</span>`, `<span name="<'">a</span>`},
-		{`<span clear=none method=GET></span>`, `<span></span>`},
+		{`<span method=GET></span>`, `<span></span>`},
 		{`<span onload="javascript:x;"></span>`, `<span onload=x;></span>`},
 		{`<span selected="selected"></span>`, `<span selected></span>`},
 		{`<noscript><html><img id="x"></noscript>`, `<noscript><img id=x></noscript>`},
 		{`<body id="main"></body>`, `<body id=main>`},
-		{`<link href="data:text/plain, data">`, `<link href="data:, data">`},
+		{`<link href="data:text/plain, data">`, `<link href=data:,%20data>`},
 		{`<svg width="100" height="100"><circle cx="50" cy="50" r="40" stroke="green" stroke-width="4" fill="yellow" /></svg>`, `<svg width="100" height="100"><circle cx="50" cy="50" r="40" stroke="green" stroke-width="4" fill="yellow" /></svg>`},
 		{`<span ></span>`, `<span></span>`},
 		{`</span >`, `</span>`},
@@ -67,6 +68,8 @@ func TestHTML(t *testing.T) {
 		{`<input type="text" value="">`, `<input>`},
 		{`<a rel="noopener">`, `<a rel=noopener>`},
 		{`<a rel=" noopener  external ">`, `<a rel="noopener external">`},
+		{`<input accept="image/png, image/jpeg">`, `<input accept=image/png,image/jpeg>`},
+		{`<p></p></label>`, `<p></p></label>`}, // experimentally found
 
 		// increase coverage
 		{`<script style="css">js</script>`, `<script style=css>js</script>`},
@@ -85,23 +88,22 @@ func TestHTML(t *testing.T) {
 
 		// whitespace
 		{`cats  and 	dogs `, `cats and dogs`},
-		{` <div> <i> test </i> <b> test </b> </div> `, `<div><i>test</i> <b>test</b></div>`},
+		{` <div> <i> test </i> <b> test </b> </div> `, `<div><i>test </i><b>test</b></div>`},
 		{`<strong>x </strong>y`, `<strong>x </strong>y`},
-		{`<strong>x </strong> y`, `<strong>x</strong> y`},
-		{"<strong>x </strong>\ny", "<strong>x</strong>\ny"},
+		{`<strong>x </strong> y`, `<strong>x </strong>y`},
+		{"<strong>x </strong>\ny", "<strong>x </strong>y"},
 		{`<p>x </p>y`, `<p>x</p>y`},
 		{`x <p>y</p>`, `x<p>y`},
 		{` <!doctype html> <!--comment--> <html> <body><p></p></body></html> `, `<!doctype html><p>`}, // spaces before html and at the start of html are dropped
 		{`<p>x<br> y`, `<p>x<br>y`},
-		{`<p>x </b> <b> y`, `<p>x</b> <b>y`},
+		{`<p>x </b> <b> y`, `<p>x </b><b>y`},
 		{`a <code></code> b`, `a <code></code> b`},
 		{`a <code>code</code> b`, `a <code>code</code> b`},
-		{`a <code> code </code> b`, `a <code>code</code> b`},
+		{`a <code> code </code> b`, `a <code>code </code>b`},
 		{`a <script>script</script> b`, `a <script>script</script>b`},
 		{"text\n<!--comment-->\ntext", "text\ntext"},
 		{"abc\n</body>\ndef", "abc\ndef"},
 		{"<x>\n<!--y-->\n</x>", "<x></x>"},
-		{"a <template> b </template> c", "a <template>b</template>c"},
 		{`<p class="  name  ">`, `<p class=name>`},
 		{`<p class="  name  other  ">`, `<p class="name other">`},
 		{`<p onclick="  javascript:lala  ">`, `<p onclick=lala>`},
@@ -111,6 +113,10 @@ func TestHTML(t *testing.T) {
 		{`a<picture> <img> </picture>b`, `a<picture> <img> </picture>b`},
 		{`a <picture> <img> </picture>b`, `a <picture><img> </picture>b`},
 		{`<input placeholder=" a " value=" b ">`, `<input placeholder=" a " value=" b ">`},
+		{`a <strike> b </strike> c`, `a <strike>b </strike>c`},
+		{`a <svg>`, `a <svg>`},
+		{"<h5>\n    Lorem & ipsum\n    dolor sid amet\n</h5>", "<h5>Lorem & ipsum\ndolor sid amet</h5>"},
+		{`cats  <br>  dogs `, `cats<br>dogs`},
 
 		// from HTML Minifier
 		{`<DIV TITLE="blah">boo</DIV>`, `<div title=blah>boo</div>`},
@@ -119,7 +125,6 @@ func TestHTML(t *testing.T) {
 		{`<input maxlength="     5 ">`, `<input maxlength=5>`},
 		{`<input type="text">`, `<input>`},
 		{`<form method="get">`, `<form>`},
-		{`<script language="Javascript">alert(1)</script>`, `<script>alert(1)</script>`},
 		{`<script></script>`, ``},
 		{`<p onclick=" JavaScript: x">x</p>`, `<p onclick=" x">x`},
 		{`<span Selected="selected"></span>`, `<span selected></span>`},
@@ -131,7 +136,7 @@ func TestHTML(t *testing.T) {
 		{`<meta name="keywords" content="A, B">`, `<meta name=keywords content="A,B">`},
 		{`<iframe><html> <p> x </p> </html></iframe>`, `<iframe><p>x</iframe>`},
 		{`<math> &int;_a_^b^{f(x)<over>1+x} dx </math>`, `<math> &int;_a_^b^{f(x)<over>1+x} dx </math>`},
-		{`<script language="x" charset="x" src="y"></script>`, `<script src=y></script>`},
+		{`<script charset="x" src="y"></script>`, `<script src=y></script>`},
 		{`<style media="all">x</style>`, `<style>x</style>`},
 		{`<a id="abc" name="abc">y</a>`, `<a id=abc>y</a>`},
 		{`<a name="abc" id="abc">y</a>`, `<a id=abc>y</a>`},
@@ -141,7 +146,7 @@ func TestHTML(t *testing.T) {
 		{`<span style="font-family:&quot;Helvetica Neue&quot;,&quot;Helvetica&quot;,Helvetica,Arial,sans-serif">text</span>`, `<span style='font-family:"Helvetica Neue","Helvetica",Helvetica,Arial,sans-serif'>text</span>`},
 
 		// go-fuzz
-		{`<meta e t n content=ful><a b`, `<meta e t n content="ful"><a b>`},
+		{`<meta e t n content=ful><a b`, `<meta e t n content=ful><a b>`},
 		{`<img alt=a'b="">`, `<img alt='a&#39;b=""'>`},
 		{`</b`, `</b`},
 		{`<title></`, `<title></`},
@@ -151,18 +156,24 @@ func TestHTML(t *testing.T) {
 		{`<script><!--<`, `<script><!--<`},
 
 		// bugs
-		{`<svg id="1"></svg>`, `<svg id="1"></svg>`},                                                             // #67
-		{`<pre> <x> a  b </x> </pre>`, `<pre> <x> a  b </x> </pre>`},                                             // #82
-		{`text <progress></progress> text`, `text <progress></progress> text`},                                   // #89
-		{`text <img> text`, `text <img> text`},                                                                   // #89
-		{`<p>text</p><br>text`, `<p>text</p><br>text`},                                                           // #122
-		{`<amp-analytics type=adobeanalytics_nativeConfig>`, `<amp-analytics type=adobeanalytics_nativeConfig>`}, // #270
-		{`<input title=""><input lang="">`, `<input title><input lang>`},                                         // #331
-		{`<span translate="no">`, `<span translate=no>`},                                                         // #352
-		{`<i class="fas"> </i> Text`, `<i class=fas></i>Text`},                                                   // #390
-		{`<i class="fas"></i> Text`, `<i class=fas></i> Text`},                                                   // #390
-		{`a <span></span> b`, `a <span></span> b`},                                                               // #427
-		{`<canvas><p>test</p></canvas>`, `<canvas><p>test</p></canvas>`},                                         // #440
+		{`<svg id="1"></svg>`, `<svg id="1"></svg>`},                                                                                     // #67
+		{`<pre> <x> a  b </x> </pre>`, `<pre> <x> a  b </x> </pre>`},                                                                     // #82
+		{`text <progress></progress> text`, `text <progress></progress> text`},                                                           // #89
+		{`text <img> text`, `text <img> text`},                                                                                           // #89
+		{`<p>text</p><br>text`, `<p>text</p><br>text`},                                                                                   // #122
+		{`<amp-analytics type=adobeanalytics_nativeConfig>`, `<amp-analytics type=adobeanalytics_nativeConfig>`},                         // #270
+		{`<input title=""><input lang="">`, `<input title><input lang>`},                                                                 // #331
+		{`<span translate="no">`, `<span translate=no>`},                                                                                 // #352
+		{`<i class="fas"> </i> Text`, `<i class=fas></i>Text`},                                                                           // #390
+		{`<i class="fas"></i> Text`, `<i class=fas></i> Text`},                                                                           // #390
+		{`a <span></span> b`, `a <span></span> b`},                                                                                       // #427
+		{`<canvas><p>test</p></canvas>`, `<canvas><p>test</p></canvas>`},                                                                 // #440
+		{`<source type='video/mp4; codecs="av01.0.05M.08"'>`, `<source type='video/mp4;codecs="av01.0.05M.08"'>`},                        // #545
+		{`<html lang="mn-Cyrl-MN">`, `<html lang=mn-Cyrl-MN>`},                                                                           // #579
+		{`<script src=a></script> <script src=b></script> <span></span>`, `<script src=a></script><script src=b></script><span></span>`}, // #592
+		{`a <math>b</math> c`, `a <math>b</math> c`},                                                                                     // #611
+		{`a <svg>b</svg> c`, `a <svg>b</svg> c`},                                                                                         // #611
+		{`<template><li>a</li><div>b</div></template>`, `<template><li>a</li><div>b</div></template>`},                                   // #907
 	}
 
 	m := minify.New()
@@ -191,16 +202,28 @@ func TestHTMLCSSJS(t *testing.T) {
 		expected string
 	}{
 		// bugs
-		{`<script>var a='<\/script>'</script>`, `<script>var a='<\/script>'</script>`},                                                          // #355
-		{`<script>var a='</scr'+'ipt>'</script>`, `<script>var a='<\/script>'</script>`},                                                        // #355
+		{`<script>var a="<\/script>"</script>`, `<script>var a="<\/script>"</script>`},                                                          // #355
+		{`<script>var a="</scr"+"ipt>"</script>`, `<script>var a="<\/script>"</script>`},                                                        // #355
 		{`<div style="font-family: Arial, &#39;sans-serif&#39;; font-size: 22px;">`, `<div style=font-family:Arial,sans-serif;font-size:22px>`}, // #272
 		{`<style amp-boilerplate>body{-webkit-animation:-amp-start 8s    steps(1,end) 0s 1 normal both;}</style>`, `<style amp-boilerplate>body{-webkit-animation:-amp-start 8s steps(1,end) 0s 1 normal both;}</style>`},
+		{`<button onclick="return false">`, `<button onclick=return!1>`},                                                                                                                      // #631
+		{`<html><svg id="foo" viewBox="0 0 1 1" xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>`, `<svg id="foo" viewBox="0 0 1 1"><rect width="1" height="1"/></svg>`}, // #704
+		{`<svg><svg></svg><path d="M"/></svg>`, `<svg><svg/><path d="M"/></svg>`},                                                                                                             // #1055
+		{`<math><math></math><mi attr="x"/></math>`, `<math><math/><mi attr="x"/></math>`},                                                                                                    // #1055
+		{`<script>var a="<\/script>"</script>`, `<script>var a="<\/script>"</script>`},
+		{`<script>var a="<\/SCRIPT>"</script>`, `<script>var a="<\/SCRIPT>"</script>`},
+		{`<script>var a="\x3c/SCRIPT>"</script>`, `<script>var a="<\/SCRIPT>"</script>`},
+		{`<script>var a="</scr"+"ipt>"</script>`, `<script>var a="<\/script>"</script>`},
+		{`<script>x< /SCRIPT>/</script>`, `<script>x< /SCRIPT>/</script>`},
+		{`<script>var a="<\/script >"</script>`, `<script>var a="<\/script >"</script>`},
 	}
 
 	m := minify.New()
 	m.AddFunc("text/html", Minify)
 	m.AddFunc("text/css", css.Minify)
 	m.AddFunc("application/javascript", js.Minify)
+	m.AddFunc("image/svg+xml", svg.Minify)
+	m.AddFuncRegexp(regexp.MustCompile("[/+]xml$"), xml.Minify)
 	for _, tt := range htmlTests {
 		t.Run(tt.html, func(t *testing.T) {
 			r := bytes.NewBufferString(tt.html)
@@ -232,7 +255,7 @@ func TestHTMLKeepEndTags(t *testing.T) {
 	}
 }
 
-func TestHTMLKeepConditionalComments(t *testing.T) {
+func TestHTMLKeepSpecialComments(t *testing.T) {
 	htmlTests := []struct {
 		html     string
 		expected string
@@ -242,10 +265,13 @@ func TestHTMLKeepConditionalComments(t *testing.T) {
 		{`<!--[if IE 6]--> <b> </b> <!--[endif]-->`, `<!--[if IE 6]--><b></b><!--[endif]-->`},
 		{`<!--[if !mso]><!--> <b> </b> <!--<![endif]-->`, `<!--[if !mso]><!--><b></b><!--<![endif]-->`},
 		{`<!--[if gt IE 6]><!--> <b> </b> <![endif]-->`, `<!--[if gt IE 6]><!--><b></b><![endif]-->`},
+		{`<!--[if IE]foo<![endif]-->`, `<!--[if IE]foo<![endif]-->`}, // #596
+		{`<!--# SSI-->`, `<!--# SSI-->`},                             // #657
+		{`<!--[if mso]><noscript><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml></noscript><![endif]-->`, `<!--[if mso]><noscript><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml></noscript><![endif]-->`}, // #832
 	}
 
 	m := minify.New()
-	htmlMinifier := &Minifier{KeepConditionalComments: true}
+	htmlMinifier := &Minifier{KeepSpecialComments: true}
 	for _, tt := range htmlTests {
 		t.Run(tt.html, func(t *testing.T) {
 			r := bytes.NewBufferString(tt.html)
@@ -300,6 +326,9 @@ func TestHTMLKeepQuotes(t *testing.T) {
 		expected string
 	}{
 		{`<p attr="test">`, `<p attr="test">`},
+		{`<p attr='test'>`, `<p attr='test'>`},
+		{`<p attr=test>`, `<p attr=test>`},
+		{`<meta name='viewport' content='width=device-width, initial-scale=1'>`, `<meta name='viewport' content='width=device-width,initial-scale=1'>`},
 	}
 
 	m := minify.New()
@@ -347,11 +376,73 @@ func TestHTMLURL(t *testing.T) {
 	}
 }
 
+func TestHTMLGoTemplates(t *testing.T) {
+	htmlTests := []struct {
+		html     string
+		expected string
+	}{
+		{`<a href={{ .Link }} />`, `<a href={{ .Link }}>`},
+		{`<input type="file" accept="{{ .Accept }}, image/jpeg">`, `<input type=file accept="{{ .Accept }}, image/jpeg">`},
+		{`<option value="0" {{ if eq .Type 0 }}selected{{ end }}>Foo</option>`, `<option value=0 {{ if eq .Type 0 }}selected{{ end }}>Foo`},
+		{`<style>a { color: {{.Color}} }</style>`, `<style>a { color: {{.Color}} }</style>`},
+		{`<div style=" color: {{.Color}} ">`, `<div style=" color: {{.Color}} ">`},
+		{`<script>alert( {{.Alert}} )</script>`, `<script>alert( {{.Alert}} )</script>`},
+		{`<button onclick=" alert( {{.Alert}} ) ">`, `<button onclick=" alert( {{.Alert}} ) ">`},
+		{`<select>{{ range . }}<option>{{ . }}{{ end }}</select>`, `<select>{{ range . }}<option>{{ . }}{{ end }}</select>`},
+		{`<p>Hello <code>{{""}}</code> there</p>`, `<p>Hello <code>{{""}}</code> there`},
+		{`<select><option>Default</option>{{range $i, $lang := .Languages}}<option>{{$lang}}</option>{{end}}</select>`, `<select><option>Default{{range $i, $lang := .Languages}}<option>{{$lang}}{{end}}</select>`},
+		{`<tr{{if .Deleted}} class="is-disabled"{{end}}>`, `<tr{{if .Deleted}} class="is-disabled"{{end}}>`},
+		{`<a {{.Foo}}{{xx .Bar}}>`, `<a {{.Foo}}{{xx .Bar}}>`},
+		{`<div {{if .Item.IsOpen}}data-item-open{{end}}{{if .Item.Archived}} data-item-archived{{end}}>`, `<div {{if .Item.IsOpen}}data-item-open{{end}}{{if .Item.Archived}} data-item-archived{{end}}>`},
+
+		// whitespace
+		{`{{ printf "  !  " }}`, `{{ printf "  !  " }}`},
+		{`a<p>  {{a}}  </p>b`, `a<p>{{a}}</p>b`},
+		{`a<span>  {{a}}  </span>b`, `a<span> {{a}} </span>b`},
+		{`a <span>  {{a}}  </span> b`, `a <span>{{a}} </span>b`},
+		{`  {{a}}  {{b}}  `, `{{a}} {{b}}`},
+	}
+
+	m := minify.New()
+	m.AddFunc("text/css", css.Minify)
+	m.AddFunc("application/javascript", js.Minify)
+	htmlMinifier := &Minifier{TemplateDelims: GoTemplateDelims}
+	for _, tt := range htmlTests {
+		t.Run(tt.html, func(t *testing.T) {
+			r := bytes.NewBufferString(tt.html)
+			w := &bytes.Buffer{}
+			err := htmlMinifier.Minify(m, w, r, nil)
+			test.Minify(t, tt.html, err, w.String(), tt.expected)
+		})
+	}
+}
+
+func TestHTMLPHPTemplates(t *testing.T) {
+	htmlTests := []struct {
+		html     string
+		expected string
+	}{
+		{"\n<div class=\"foo\">\n<?php\necho \"hello\";\n?>\n</div>\n", "<div class=foo><?php\necho \"hello\";\n?></div>"},
+	}
+
+	m := minify.New()
+	m.AddFunc("text/css", css.Minify)
+	htmlMinifier := &Minifier{TemplateDelims: PHPTemplateDelims}
+	for _, tt := range htmlTests {
+		t.Run(tt.html, func(t *testing.T) {
+			r := bytes.NewBufferString(tt.html)
+			w := &bytes.Buffer{}
+			err := htmlMinifier.Minify(m, w, r, nil)
+			test.Minify(t, tt.html, err, w.String(), tt.expected)
+		})
+	}
+}
+
 func TestSpecialTagClosing(t *testing.T) {
 	m := minify.New()
 	m.AddFunc("text/html", Minify)
 	m.AddFunc("text/css", func(_ *minify.M, w io.Writer, r io.Reader, _ map[string]string) error {
-		b, err := ioutil.ReadAll(r)
+		b, err := io.ReadAll(r)
 		test.Error(t, err)
 		test.String(t, string(b), "</script>")
 		_, err = w.Write(b)
@@ -394,7 +485,7 @@ func TestWriterErrors(t *testing.T) {
 
 	m := minify.New()
 	m.Add("text/html", &Minifier{
-		KeepConditionalComments: true,
+		KeepSpecialComments: true,
 	})
 
 	for _, tt := range errorTests {

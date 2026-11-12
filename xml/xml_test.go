@@ -20,7 +20,7 @@ func TestXML(t *testing.T) {
 		{`<A>x</A>`, `<A>x</A>`},
 		{`<a><b>x</b></a>`, `<a><b>x</b></a>`},
 		{"<a><b>x\ny</b></a>", "<a><b>x\ny</b></a>"},
-		{`<a> <![CDATA[ a ]]> </a>`, `<a>a</a>`},
+		{`<a> <![CDATA[ a ]]> </a>`, `<a> a </a>`},
 		{`<a >a</a >`, `<a>a</a>`},
 		{`<?xml  version="1.0" ?>`, `<?xml version="1.0"?>`},
 		{`<x></x>`, `<x/>`},
@@ -28,12 +28,19 @@ func TestXML(t *testing.T) {
 		{`<x a="b"></x>`, `<x a="b"/>`},
 		{`<x a=""></x>`, `<x a=""/>`},
 		{`<x a=a></x>`, `<x a=a/>`},
+		{`<x a=foo></x>`, `<x a=foo/>`},
 		{"<x a=\" a \n\r\t b \"/>", `<x a=" a     b "/>`},
+		{`<x a="p&#9;q&#10;r&#13;s"/>`, `<x a="p&#9;q&#10;r&#13;s"/>`}, // keep whitespace refs, else normalization turns them to spaces
+		{`<x a="&#09;&#0009;"/>`, `<x a="&#9;&#9;"/>`},                 // strip leading zeros
+		{`<x a="&#x9;&#xA;&#xd;"/>`, `<x a="&#9;&#10;&#13;"/>`},        // hex canonicalises to decimal
+		{`<x a="&#9;end"/>`, `<x a="&#9;end"/>`},                       // ref at value boundary is kept
 		{`<x a="&apos;b&quot;"></x>`, `<x a="'b&#34;"/>`},
 		{`<x a="&quot;&quot;'"></x>`, `<x a='""&#39;'/>`},
-		{`<x a="&amp;&lt;&gt;"></x>`, `<x a="&amp;&lt;>"/>`},
-		{`<x>&amp;&lt;&gt;</x>`, `<x>&amp;&lt;></x>`},
+		{`<x a="&amp;&lt;&gt;"></x>`, `<x a="&amp;&lt;&gt;"/>`},
+		{`<x>&amp;&lt;&gt;</x>`, `<x>&amp;&lt;&gt;</x>`},
 		{`<x>&#38;&#038;&#60;</x>`, `<x>&amp;&amp;&lt;</x>`},
+		{`<x>a&#9;b</x>`, `<x>a&#9;b</x>`},                         // keep whitespace refs in text, else normalization turns them to spaces
+		{`<x>p&#9;q&#10;r&#13;s</x>`, `<x>p&#9;q&#10;r&#13;s</x>`}, // same for LF and CR
 		{`<!DOCTYPE foo SYSTEM "Foo.dtd">`, `<!DOCTYPE foo SYSTEM "Foo.dtd">`},
 		{`text <!--comment--> text`, `text text`},
 		{"text\n<!--comment-->\ntext", "text\ntext"},
@@ -41,6 +48,7 @@ func TestXML(t *testing.T) {
 		{"<x>\n<!--y-->\n</x>", `<x></x>`},
 		{`<style>lala{color:red}</style>`, `<style>lala{color:red}</style>`},
 		{`cats  and 	dogs `, `cats and dogs`},
+		{`<x> ]]&gt; </x>`, `<x>]]&gt;</x>`}, // #825
 
 		// go fuzz
 		{`</0`, `</0`},
@@ -73,6 +81,11 @@ func TestXMLKeepWhitespace(t *testing.T) {
 		{`<x> <?xml?> </x>`, `<x><?xml?> </x>`},
 		{`<x> <![CDATA[ x ]]> </x>`, `<x> x </x>`},
 		{`<x> <![CDATA[ <<<<< ]]> </x>`, `<x><![CDATA[ <<<<< ]]></x>`},
+
+		{` <![CDATA[ %d ]]> `, ` %d `},             // #722
+		{`<a><![CDATA[ %d ]]></a>`, `<a> %d </a>`}, // #722
+		{`<a><![CDATA[ %d ]]><b>`, `<a> %d <b>`},   // #722
+		{`<a> %d <b>`, `<a> %d <b>`},               // #722
 	}
 
 	m := minify.New()
